@@ -100,6 +100,34 @@ body{font-family:var(--font);background:#f1f5f9;color:var(--text);min-height:100
 .term-key{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding-top:.42rem;font-weight:600;}
 input.price-input{cursor:text;}
 
+/* ===== ITEM IMAGE UPLOAD ===== */
+.item-img-upload{margin-bottom:.4rem;}
+.item-img-upload label{display:block;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:.25rem;}
+.item-img-dropzone{
+  border:2px dashed #cbd5e1;border-radius:6px;padding:.5rem;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:.3rem;cursor:pointer;transition:all .15s;background:#f8fafc;
+  min-height:58px;position:relative;overflow:hidden;
+}
+.item-img-dropzone:hover,.item-img-dropzone.drag-over{border-color:var(--primary);background:var(--primary-lt);}
+.item-img-dropzone .dz-icon{color:#94a3b8;transition:color .15s;}
+.item-img-dropzone:hover .dz-icon,.item-img-dropzone.drag-over .dz-icon{color:var(--primary);}
+.item-img-dropzone .dz-hint{font-size:9px;color:var(--muted);text-align:center;line-height:1.4;}
+.item-img-dropzone:hover .dz-hint,.item-img-dropzone.drag-over .dz-hint{color:var(--primary-dark);}
+.item-img-preview{width:100%;border-radius:5px;display:block;max-height:120px;object-fit:contain;margin-top:.2rem;}
+.item-img-remove{
+  position:absolute;top:3px;right:3px;
+  background:rgba(192,57,43,.85);color:#fff;border:none;border-radius:3px;
+  font-size:10px;line-height:1;padding:2px 5px;cursor:pointer;
+  display:none;
+}
+.item-img-dropzone:hover .item-img-remove,.item-img-remove.visible{display:block;}
+.item-img-hidden-input{display:none;}
+
+/* ===== PREVIEW TABLE ITEM IMAGE ===== */
+.item-img-cell{max-width:80px;padding:.4rem .5rem!important;vertical-align:middle;}
+.item-img-cell img{width:72px;height:72px;object-fit:contain;border-radius:4px;border:1px solid #e2e8f0;background:#f8fafc;display:block;}
+
 /* ===== PREVIEW PANE ===== */
 .preview-pane{flex:1;overflow-y:auto;padding:1.75rem;background:var(--blush);}
 .preview-pane::-webkit-scrollbar{width:6px;}
@@ -589,6 +617,7 @@ input.price-input{cursor:text;}
           <th style="width:32px">Qty</th>
           <th style="width:38px">Unit</th>
           <th>Model / Description</th>
+          <th style="width:84px" class="c">Image</th>
           <th style="width:68px" class="c">Avail.</th>
           <th class="r" style="width:100px">Unit Price<br><span style="font-size:7.5px;color:#f9a8a8;font-weight:400;letter-spacing:.08em">/ Disc. Price</span></th>
           <th class="r" style="width:100px">Total<br><span style="font-size:7.5px;color:#f9a8a8;font-weight:400;letter-spacing:.08em">/ Disc. Total</span></th>
@@ -952,7 +981,7 @@ function attachPriceInput(el){
 // ===== SIDEBAR ITEMS =====
 function addItem(data){
   const id=Date.now()+(Math.random()*100|0);
-  items.push({id,qty:'',unit:'Units',name:'',desc:'',avail:'On Stock',unitPrice:'',discPrice:'',total:'',discTotal:''});
+  items.push({id,qty:'',unit:'Units',name:'',desc:'',avail:'On Stock',unitPrice:'',discPrice:'',total:'',discTotal:'',image:''});
   if(data)Object.assign(items[items.length-1],data);
   renderSidebar();render();
 }
@@ -1004,6 +1033,43 @@ function updateItem(id,field,val){
   }
   render();
 }
+function handleItemImagePaste(id, event){
+  const items_clip=event.clipboardData&&event.clipboardData.items;
+  if(!items_clip)return;
+  for(let i=0;i<items_clip.length;i++){
+    if(items_clip[i].type.startsWith('image/')){
+      event.preventDefault();
+      handleItemImageFile(id,items_clip[i].getAsFile());
+      return;
+    }
+  }
+}
+function handleItemImageFile(id, file){
+  if(!file||!file.type.startsWith('image/'))return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    const item=items.find(i=>i.id===id);
+    if(!item)return;
+    item.image=e.target.result;
+    // Update the dropzone in-place without full re-render
+    const dz=document.querySelector(`.item-img-dropzone[data-img-id="${id}"]`);
+    if(dz){
+      dz.innerHTML=`<img class="item-img-preview" src="${e.target.result}" alt="Product Image">
+        <button class="item-img-remove visible" onclick="removeItemImage(${id});event.stopPropagation();" title="Remove image">&#215;</button>`;
+    }
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+function removeItemImage(id){
+  const item=items.find(i=>i.id===id);
+  if(item){item.image='';render();}
+  const dz=document.querySelector(`.item-img-dropzone[data-img-id="${id}"]`);
+  if(dz){
+    dz.innerHTML=`<svg class="dz-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      <span class="dz-hint">Click, drag &amp; drop,<br>or paste image</span>`;
+  }
+}
 function renderSidebar(activeId){
   const list=document.getElementById('itemsList');
   list.innerHTML=items.map((item,idx)=>`
@@ -1012,6 +1078,25 @@ function renderSidebar(activeId){
       <div class="item-fields">
         <div class="field"><label>Model / Name</label><input value="${esc(item.name)}" oninput="updateItem(${item.id},'name',this.value)" placeholder="e.g. IPHONE 17 PRO MAX"></div>
         <div class="field"><label>Description / Specs</label><textarea oninput="updateItem(${item.id},'desc',this.value)" placeholder="Specs, details&#8230;">${esc(item.desc)}</textarea></div>
+
+        <div class="item-img-upload">
+          <label>Product Image</label>
+          <div class="item-img-dropzone" tabindex="0" data-img-id="${item.id}"
+            onclick="document.getElementById('img-file-${item.id}').click()"
+            ondragover="event.preventDefault();this.classList.add('drag-over')"
+            ondragleave="this.classList.remove('drag-over')"
+            ondrop="event.preventDefault();this.classList.remove('drag-over');handleItemImageFile(${item.id},event.dataTransfer.files[0])"
+            onpaste="handleItemImagePaste(${item.id},event)"
+            onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('img-file-${item.id}').click()">
+            ${item.image
+              ?`<img class="item-img-preview" src="${item.image}" alt="Product Image">
+                 <button class="item-img-remove visible" onclick="removeItemImage(${item.id});event.stopPropagation();" title="Remove">&#215;</button>`
+              :`<svg class="dz-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+               <span class="dz-hint">Click, drag &amp; drop,<br>or paste image</span>`}
+          </div>
+          <input class="item-img-hidden-input" type="file" id="img-file-${item.id}" accept="image/*" onchange="handleItemImageFile(${item.id},this.files[0])">
+        </div>
+
         <div class="field-row">
           <div class="field"><label>Qty</label><input type="number" min="0" step="1" value="${esc(item.qty)}" onchange="updateItem(${item.id},'qty',this.value)" placeholder="1"></div>
           <div class="field"><label>Unit</label><input value="${esc(item.unit)}" oninput="updateItem(${item.id},'unit',this.value)" placeholder="Units"></div>
@@ -1071,12 +1156,16 @@ function render(){
       :item.avail==='Order Basis'
       ?`<span class="avail-badge avail-order">Order Basis</span>`
       :`<span class="avail-badge avail-other">${esc(item.avail)}</span>`;
+    const imgCell=item.image
+      ?`<td class="item-img-cell c"><img src="${item.image}" alt="${esc(item.name)}"></td>`
+      :`<td class="item-img-cell c" style="color:var(--muted);font-size:9px;text-align:center;">—</td>`;
     return`<tr><td>${idx+1}</td><td>${esc(item.qty)||'—'}</td><td>${esc(item.unit)||'—'}</td>
       <td><span class="item-name">${esc(item.name)||'—'}</span><span class="item-desc">${esc(item.desc)}</span></td>
+      ${imgCell}
       <td class="c">${badge}</td>
       <td class="r"><div class="price-cell">${up?`<span class="price-orig-top">${formatPHP(up)}</span>`:'<span style="color:var(--muted)">—</span>'}${dp?`<span class="price-disc-bottom">${formatPHP(dp)}${hasDist?` <span class="savings-badge">-${savePct}%</span>`:''}</span>`:`<span style="color:var(--muted);font-size:10px;">—</span>`}</div></td>
       <td class="r"><div class="price-cell">${tot?`<span class="price-orig-top">${formatPHP(tot)}</span>`:'<span style="color:var(--muted)">—</span>'}${dtot&&dtot!==tot?`<span class="price-disc-bottom">${formatPHP(dtot)}</span>`:tot&&dtot===tot?`<span class="price-disc-bottom">${formatPHP(tot)}</span>`:`<span style="color:var(--muted);font-size:10px;">—</span>`}</div></td></tr>`;
-  }).join('')||`<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:1rem;font-size:11px">No items added yet</td></tr>`;
+  }).join('')||`<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:1rem;font-size:11px">No items added yet</td></tr>`;
   const effectiveDisc=grandDisc||grandOrig;
   const savings=grandOrig-effectiveDisc;
   setText('p-origTotal',formatPHP(grandOrig));
