@@ -422,6 +422,7 @@ input.price-input{cursor:text;}
       <button class="modal-tab active" id="dtab-overview" onclick="switchDashTab('overview')">📊 Overview</button>
       <button class="modal-tab" id="dtab-records" onclick="switchDashTab('records')">📋 All Records</button>
       <button class="modal-tab" id="dtab-users" id="dtab-users-btn" onclick="switchDashTab('users')" style="display:none;">👥 Users</button>
+      <button class="modal-tab" id="dtab-logs" onclick="switchDashTab('logs')" style="display:none;">🕵️ Activity Log</button>
     </div>
     <div class="modal-body">
       <!-- OVERVIEW TAB -->
@@ -466,6 +467,14 @@ input.price-input{cursor:text;}
         </div>
         <div class="dash-section-title">Registered Users</div>
         <div id="dash-users-list"></div>
+      </div>
+      <!-- ACTIVITY LOG TAB (admin only) -->
+      <div class="tab-pane" id="dpane-logs" style="padding:1.25rem;">
+        <div style="margin-bottom:.75rem;display:flex;gap:.5rem;align-items:center;">
+          <input type="text" id="logSearch" placeholder="Search by user or action..." oninput="filterActivityLogs()" style="flex:1;padding:.4rem .7rem;font-family:var(--font);font-size:12px;border:1.5px solid var(--border);border-radius:5px;outline:none;">
+          <button class="btn btn-ghost" onclick="document.getElementById('logSearch').value='';filterActivityLogs()">Clear</button>
+        </div>
+        <div id="dash-logs-list"></div>
       </div>
     </div>
   </div>
@@ -1380,104 +1389,159 @@ function generateQRCodes(refNo, snapshot){
   if(el2){el2.innerHTML='';new QRCode(el2,{text:refNo,width:84,height:84,colorDark:'#c0392b',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.H});}
 }
 
-// ===== INDEXEDDB =====
-let db;
-const DB_NAME='JonecoQuotationsDB';
-const DB_VERSION=3;
-const STORE='transactions';
-const USER_STORE='users';
+// ===== SUPABASE CONFIG =====
+// 1. Create a Supabase project at https://supabase.com
+// 2. Run the SQL setup below in your Supabase SQL Editor:
+//
+//   CREATE TABLE IF NOT EXISTS transactions (
+//     id bigint generated always as identity primary key,
+//     "refNo" text unique not null,
+//     "savedAt" timestamptz default now(),
+//     "clName" text, "clOrg" text, "clAddress" text, "clEmail" text, "clPhone" text,
+//     "coName" text, "coAddress" text, "coTel" text, "coMobile" text,
+//     "qDate" text, validity text, salutation text, opening text,
+//     "tCurrency" text, "tPayment" text, "tDelivery" text, "tInstall" text, "tCancel" text,
+//     "bankName" text, "bankAcct" text, "bankNo" text,
+//     "sig1name" text, "sig1title" text, "sig2name" text, "sig2title" text,
+//     "tcA1" text, "tcA2" text, "tcA3" text, "tcA4" text,
+//     "tcB1" text, "tcC1" text, "tcC2" text, "tcC3" text,
+//     "tcD1" text, "tcD2" text, "tcE1" text, "tcF1" text,
+//     "amtDue" text,
+//     items jsonb default '[]'
+//   );
+//
+//   CREATE TABLE IF NOT EXISTS users (
+//     username text primary key,
+//     password text not null,
+//     role text not null default 'user',
+//     "createdAt" timestamptz default now()
+//   );
+//   INSERT INTO users (username, password, role) VALUES ('admin','admin123','admin') ON CONFLICT DO NOTHING;
+//
+//   CREATE TABLE IF NOT EXISTS activity_logs (
+//     id bigint generated always as identity primary key,
+//     username text not null,
+//     action text not null,
+//     detail text,
+//     "loggedAt" timestamptz default now()
+//   );
+//   ALTER TABLE activity_logs DISABLE ROW LEVEL SECURITY;
+//
+//   -- Disable Row Level Security for internal use (or configure policies as needed):
+//   ALTER TABLE transactions DISABLE ROW LEVEL SECURITY;
+//   ALTER TABLE users DISABLE ROW LEVEL SECURITY;
+//
+// 3. Fill in your project URL and anon key below:
 
-function openDB(){
-  return new Promise((resolve,reject)=>{
-    if(db){resolve(db);return;}
-    const req=indexedDB.open(DB_NAME,DB_VERSION);
-    req.onupgradeneeded=e=>{
-      const database=e.target.result;
-      if(!database.objectStoreNames.contains(STORE)){
-        const store=database.createObjectStore(STORE,{keyPath:'id',autoIncrement:true});
-        store.createIndex('refNo','refNo',{unique:true});
-        store.createIndex('savedAt','savedAt',{unique:false});
-      } else {
-        const tx=e.target.transaction;
-        const store=tx.objectStore(STORE);
-        if(store.indexNames.contains('refNo')){
-          store.deleteIndex('refNo');
-        }
-        store.createIndex('refNo','refNo',{unique:true});
-      }
-      if(!database.objectStoreNames.contains(USER_STORE)){
-        const us=database.createObjectStore(USER_STORE,{keyPath:'username'});
-        us.createIndex('role','role',{unique:false});
-      }
-    };
-    req.onsuccess=e=>{
-      db=e.target.result;
-      ensureAdminUser(db);
-      resolve(db);
-    };
-    req.onerror=e=>reject(e.target.error);
-  });
-}
+const SB_URL = 'https://ozysirpyjwjrmerdrvht.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im96eXNpcnB5andqcm1lcmRydmh0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE2MzQzNTYsImV4cCI6MjA5NzIxMDM1Nn0._frxo8OTqIkDtDuJWDy8feEg2DetVhR6gPSvE_4VOWI';
 
-// Ensure admin user exists
-function ensureAdminUser(database){
-  const tx=database.transaction(USER_STORE,'readwrite');
-  const store=tx.objectStore(USER_STORE);
-  const req=store.get('admin');
-  req.onsuccess=e=>{
-    if(!e.target.result){
-      store.add({username:'admin',password:'admin123',role:'admin',createdAt:new Date().toISOString()});
-    }
+// ===== SUPABASE HELPERS =====
+async function sbFetch(path, options={}){
+  const prefer = options._prefer || '';
+  const hdrs = {
+    'apikey': SB_KEY,
+    'Authorization': 'Bearer '+SB_KEY,
+    'Content-Type': 'application/json',
+    'Accept-Profile': 'public',
+    'Content-Profile': 'public'
   };
+  if(prefer) hdrs['Prefer'] = prefer;
+  const fetchOpts = {method: options.method||'GET', headers: hdrs};
+  if(options.body) fetchOpts.body = options.body;
+  const res = await fetch(SB_URL+'/rest/v1/'+path, fetchOpts);
+  if(!res.ok){
+    let msg='Supabase error '+res.status;
+    try{const j=await res.json();msg=j.message||j.error||msg;}catch(e){}
+    throw new Error(msg);
+  }
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('json')) return res.json();
+  return null;
 }
 
-// User DB helpers
+// ===== USER HELPERS =====
 async function getAllUsers(){
-  const database=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=database.transaction(USER_STORE,'readonly');
-    const req=tx.objectStore(USER_STORE).getAll();
-    req.onsuccess=e=>resolve(e.target.result);
-    req.onerror=()=>reject(new Error('Failed to load users'));
-  });
+  return sbFetch('users?select=*&order=createdAt.asc', {headers:{'Accept-Profile':'public'}});
 }
 async function getUserByUsername(username){
-  const database=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=database.transaction(USER_STORE,'readonly');
-    const req=tx.objectStore(USER_STORE).get(username);
-    req.onsuccess=e=>resolve(e.target.result||null);
-    req.onerror=()=>reject(new Error('Failed to get user'));
-  });
+  const rows=await sbFetch('users?username=eq.'+encodeURIComponent(username)+'&select=*&limit=1');
+  return (rows&&rows[0])||null;
 }
 async function createUser(username,password,role='user'){
-  const database=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=database.transaction(USER_STORE,'readwrite');
-    const req=tx.objectStore(USER_STORE).add({username,password,role,createdAt:new Date().toISOString()});
-    req.onsuccess=()=>resolve(true);
-    req.onerror=()=>reject(new Error('Username already exists'));
+  const existing=await getUserByUsername(username);
+  if(existing) throw new Error('Username already exists');
+  await sbFetch('users',{
+    method:'POST',
+    _prefer:'return=minimal',
+    body:JSON.stringify({username,password,role,createdAt:new Date().toISOString()})
   });
+  return true;
 }
 async function deleteUser(username){
-  const database=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=database.transaction(USER_STORE,'readwrite');
-    tx.objectStore(USER_STORE).delete(username);
-    tx.oncomplete=()=>resolve(true);
-    tx.onerror=()=>reject(new Error('Failed to delete user'));
+  await sbFetch('users?username=eq.'+encodeURIComponent(username),{method:'DELETE'});
+  return true;
+}
+
+// ===== RECORD HELPERS =====
+async function getAllRecords(){
+  return sbFetch('transactions?select=*&order=savedAt.asc');
+}
+async function getRecordById(id){
+  const rows=await sbFetch('transactions?id=eq.'+id+'&select=*&limit=1');
+  return (rows&&rows[0])||null;
+}
+async function insertRecord(snapshot){
+  const rows=await sbFetch('transactions',{
+    method:'POST',
+    _prefer:'return=representation',
+    body:JSON.stringify(snapshot)
+  });
+  return rows&&rows[0];
+}
+async function updateRecordById(id,snapshot){
+  await sbFetch('transactions?id=eq.'+id,{
+    method:'PATCH',
+    _prefer:'return=minimal',
+    body:JSON.stringify(snapshot)
+  });
+}
+async function upsertRecordByRef(snapshot){
+  await sbFetch('transactions',{
+    method:'POST',
+    _prefer:'return=minimal,resolution=merge-duplicates',
+    headers:{'Prefer':'return=minimal,resolution=merge-duplicates'},
+    body:JSON.stringify(snapshot)
+  });
+}
+async function deleteRecordById(id){
+  await sbFetch('transactions?id=eq.'+id,{method:'DELETE'});
+}
+async function promoteUserToAdmin(username){
+  await sbFetch('users?username=eq.'+encodeURIComponent(username),{
+    method:'PATCH',
+    _prefer:'return=minimal',
+    body:JSON.stringify({role:'admin'})
   });
 }
 
-async function getAllRecords(){
-  const database=await openDB();
-  return new Promise((resolve,reject)=>{
-    const tx=database.transaction(STORE,'readonly');
-    const store=tx.objectStore(STORE);
-    const req=store.getAll();
-    req.onsuccess=e=>resolve(e.target.result);
-    req.onerror=()=>reject(new Error('Failed to load records'));
-  });
+// openDB kept as a no-op for compatibility
+async function openDB(){ return true; }
+
+// ===== ACTIVITY LOGGING =====
+async function logActivity(action, detail=''){
+  try{
+    const username = currentUser ? currentUser.username : 'system';
+    await sbFetch('activity_logs',{
+      method:'POST',
+      _prefer:'return=minimal',
+      body:JSON.stringify({username, action, detail, loggedAt: new Date().toISOString()})
+    });
+  }catch(e){ console.warn('Log error:',e.message); }
+}
+
+async function getAllLogs(){
+  return sbFetch('activity_logs?select=*&order=loggedAt.desc&limit=200');
 }
 
 async function refreshSavedRefs(){
@@ -1674,32 +1738,22 @@ async function saveNewRecord(){
   }
   const snapshot=buildSnapshot('f',formItems);
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readwrite');
-    const store=tx.objectStore(STORE);
-    const addReq=store.add(snapshot);
-    addReq.onerror=(e)=>{
-      if(e.target.error&&e.target.error.name==='ConstraintError'){
-        showNotif('Duplicate Reference Number! Use a unique Ref No.','#c0392b');
-      } else {
-        showNotif('Error saving record.','#c0392b');
-      }
-    };
-    tx.oncomplete=async()=>{
-      showNotif('Saved successfully! Loading to preview…','#16a34a');
-      loadSnapshotToMain(snapshot);
-      generateQRCodes(refNo,snapshot);
-      closeMgmt();
-      clearAddForm();
-      await refreshSavedRefs();
-      upsertClientRecord(snapshot);
-      // Auto-generate next ref no in sidebar
-      const nextRef=await generateNextRefNo();
-      const refEl=document.getElementById('refNo');
-      if(refEl&&!refEl.value)refEl.value=nextRef;
-    };
+    const saved=await insertRecord(snapshot);
+    if(saved)snapshot.id=saved.id;
+    showNotif('Saved successfully! Loading to preview…','#16a34a');
+    logActivity('CREATE', 'Created quotation: '+refNo);
+    loadSnapshotToMain(snapshot);
+    generateQRCodes(refNo,snapshot);
+    closeMgmt();
+    clearAddForm();
+    await refreshSavedRefs();
+    upsertClientRecord(snapshot);
+    const nextRef=await generateNextRefNo();
+    const refEl=document.getElementById('refNo');
+    if(refEl&&!refEl.value)refEl.value=nextRef;
   }catch(err){
-    showNotif('Database error: '+err.message,'#c0392b');
+    if(err.message&&err.message.includes('duplicate'))showNotif('Duplicate Reference Number! Use a unique Ref No.','#c0392b');
+    else showNotif('Database error: '+err.message,'#c0392b');
   }
 }
 
@@ -1729,26 +1783,19 @@ async function loadEditList(){
 
 async function selectEditRecord(id){
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readonly');
-    const store=tx.objectStore(STORE);
-    const req=store.get(id);
-    req.onsuccess=e=>{
-      const r=e.target.result;
-      if(!r)return;
-      editingId=id;
-      // populate edit form
-      const fields=['coName','coAddress','coTel','coMobile','refNo','qDate','validity',
-        'clName','clOrg','clAddress','clEmail','clPhone','salutation','opening',
-        'tCurrency','tPayment','tDelivery','tInstall','tCancel',
-        'bankName','tcA1','tcA2','tcA3','tcA4','tcB1','tcC1','tcC2','tcC3','tcD1','tcD2','tcE1','tcF1','bankAcct','bankNo','sig1name','sig1title','sig2name','sig2title'];
-      fields.forEach(f=>{const el=document.getElementById('e-'+f);if(el)el.value=r[f]||''});
-      editItems=(r.items||[]).map(i=>({...i,id:Date.now()+(Math.random()*100|0)}));
-      renderFormItems('edit');
-      document.getElementById('edit-form-wrap').style.display='block';
-      document.getElementById('edit-form-wrap').scrollIntoView({behavior:'smooth',block:'start'});
-      document.getElementById('edit-dup-warn').classList.remove('visible');
-    };
+    const r=await getRecordById(id);
+    if(!r)return;
+    editingId=id;
+    const fields=['coName','coAddress','coTel','coMobile','refNo','qDate','validity',
+      'clName','clOrg','clAddress','clEmail','clPhone','salutation','opening',
+      'tCurrency','tPayment','tDelivery','tInstall','tCancel',
+      'bankName','tcA1','tcA2','tcA3','tcA4','tcB1','tcC1','tcC2','tcC3','tcD1','tcD2','tcE1','tcF1','bankAcct','bankNo','sig1name','sig1title','sig2name','sig2title'];
+    fields.forEach(f=>{const el=document.getElementById('e-'+f);if(el)el.value=r[f]||''});
+    editItems=(r.items||[]).map(i=>({...i,id:Date.now()+(Math.random()*100|0)}));
+    renderFormItems('edit');
+    document.getElementById('edit-form-wrap').style.display='block';
+    document.getElementById('edit-form-wrap').scrollIntoView({behavior:'smooth',block:'start'});
+    document.getElementById('edit-dup-warn').classList.remove('visible');
   }catch(err){showNotif('Error loading record.','#c0392b');}
 }
 
@@ -1771,20 +1818,15 @@ async function updateRecord(){
   const snapshot=buildSnapshot('e',editItems);
   snapshot.id=editingId;
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readwrite');
-    const store=tx.objectStore(STORE);
-    const putReq=store.put(snapshot);
-    putReq.onerror=()=>showNotif('Error updating record.','#c0392b');
-    tx.oncomplete=()=>{
-      showNotif('Record updated! Loading to preview…','#16a34a');
-      loadSnapshotToMain(snapshot);
-      generateQRCodes(refNo,snapshot);
-      cancelEdit();
-      closeMgmt();
-      refreshSavedRefs();
-      upsertClientRecord(snapshot);
-    };
+    await updateRecordById(editingId,snapshot);
+    logActivity('UPDATE','Updated quotation: '+refNo);
+    showNotif('Record updated! Loading to preview…','#16a34a');
+    loadSnapshotToMain(snapshot);
+    generateQRCodes(refNo,snapshot);
+    cancelEdit();
+    closeMgmt();
+    refreshSavedRefs();
+    upsertClientRecord(snapshot);
   }catch(err){showNotif('Database error: '+err.message,'#c0392b');}
 }
 
@@ -1834,18 +1876,12 @@ async function loadDBList(){
 
 async function loadToPreview(id){
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readonly');
-    const store=tx.objectStore(STORE);
-    const req=store.get(id);
-    req.onsuccess=e=>{
-      const r=e.target.result;
-      if(!r)return;
-      loadSnapshotToMain(r);
-      generateQRCodes(r.refNo,r);
-      closeMgmt();
-      showNotif('Loaded to preview!','#2d1a18');
-    };
+    const r=await getRecordById(id);
+    if(!r)return;
+    loadSnapshotToMain(r);
+    generateQRCodes(r.refNo,r);
+    closeMgmt();
+    showNotif('Loaded to preview!','#2d1a18');
   }catch(err){showNotif('Error loading record.','#c0392b');}
 }
 
@@ -1857,15 +1893,11 @@ function openEditFromDB(id){
 async function deleteRecord(id){
   if(!confirm('Delete this record permanently? This cannot be undone.'))return;
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readwrite');
-    const store=tx.objectStore(STORE);
-    store.delete(id);
-    tx.oncomplete=()=>{
-      showNotif('Record deleted.','#d97706');
-      loadDBList();
-      refreshSavedRefs();
-    };
+    await deleteRecordById(id);
+    logActivity('DELETE','Deleted quotation ID: '+id);
+    showNotif('Record deleted.','#d97706');
+    loadDBList();
+    refreshSavedRefs();
   }catch(err){showNotif('Error deleting record.','#c0392b');}
 }
 
@@ -1926,29 +1958,27 @@ async function saveFromPanel(){
   const isDup=savedRefNos.some(r=>r.ref.toLowerCase()===refNo.toLowerCase());
   const snap=buildPanelSnapshot();
   try{
-    const database=await openDB();
     if(isDup){
       const existingId=savedRefNos.find(r=>r.ref.toLowerCase()===refNo.toLowerCase())?.id;
-      snap.id=existingId;
-      const tx=database.transaction(STORE,'readwrite');
-      tx.objectStore(STORE).put(snap);
-      tx.oncomplete=async()=>{showNotif('Updated in DB! Ref: '+refNo,'#0d9488');generateQRCodes(refNo,snap);await refreshSavedRefs();upsertClientRecord(snap);};
+      await updateRecordById(existingId,snap);
+      logActivity('UPDATE','Panel updated quotation: '+refNo);
+      showNotif('Updated in DB! Ref: '+refNo,'#0d9488');
+      generateQRCodes(refNo,snap);
+      await refreshSavedRefs();
+      upsertClientRecord(snap);
     } else {
-      const tx=database.transaction(STORE,'readwrite');
-      const req=tx.objectStore(STORE).add(snap);
-      req.onerror=(e)=>{showNotif('Error: '+(e.target.error?.message||'unknown'),'#c0392b');};
-      tx.oncomplete=async()=>{
-        showNotif('Saved to DB! Ref: '+refNo,'#16a34a');
-        generateQRCodes(refNo,snap);
-        await refreshSavedRefs();
-        upsertClientRecord(snap);
-        // Auto-gen next ref no after save
-        const nextRef=await generateNextRefNo();
-        clearAll();
-        const refEl=document.getElementById('refNo');
-        if(refEl)refEl.value=nextRef;
-        render();
-      };
+      const saved=await insertRecord(snap);
+      if(saved)snap.id=saved.id;
+      logActivity('CREATE','Panel saved quotation: '+refNo);
+      showNotif('Saved to DB! Ref: '+refNo,'#16a34a');
+      generateQRCodes(refNo,snap);
+      await refreshSavedRefs();
+      upsertClientRecord(snap);
+      const nextRef=await generateNextRefNo();
+      clearAll();
+      const refEl=document.getElementById('refNo');
+      if(refEl)refEl.value=nextRef;
+      render();
     }
   }catch(err){showNotif('DB error: '+err.message,'#c0392b');}
 }
@@ -2120,8 +2150,11 @@ async function doLogin(){
     const dashUsersBtn=document.getElementById('dtab-users');
     if(dashUsersBtn)dashUsersBtn.style.display=user.role==='admin'?'':'none';
     showNotif('Welcome, '+user.username+'!','#0d9488');
+    logActivity('LOGIN', 'User logged in');
     await refreshSavedRefs();
-    renderSidebar();loadPreset();renderTC();
+    try{renderSidebar();}catch(ex){console.error('renderSidebar:',ex);}
+    try{loadPreset();}catch(ex){console.error('loadPreset:',ex);}
+    try{renderTC();}catch(ex){console.error('renderTC:',ex);}
   }catch(e){errEl.textContent='Error: '+e.message;errEl.classList.add('visible');}
 }
 
@@ -2150,6 +2183,7 @@ async function doRegister(){
 
 function doLogout(){
   if(!confirm('Sign out?'))return;
+  logActivity('LOGOUT','User logged out');
   currentUser=null;
   document.getElementById('authOverlay').classList.remove('hidden');
   document.getElementById('userBar').style.display='none';
@@ -2162,16 +2196,18 @@ let allDashRecords=[];
 
 function openDashboard(){
   document.getElementById('dashboardModal').classList.remove('hidden');
-  // Show users tab only for admin
+  // Show users and logs tabs only for admin
   const utab=document.getElementById('dtab-users');
   if(utab)utab.style.display=(currentUser&&currentUser.role==='admin')?'':'none';
+  const ltab=document.getElementById('dtab-logs');
+  if(ltab)ltab.style.display=(currentUser&&currentUser.role==='admin')?'':'none';
   switchDashTab('overview');
 }
 function closeDashboard(){
   document.getElementById('dashboardModal').classList.add('hidden');
 }
 function switchDashTab(tab){
-  ['overview','records','users'].forEach(t=>{
+  ['overview','records','users','logs'].forEach(t=>{
     const btn=document.getElementById('dtab-'+t);
     const pane=document.getElementById('dpane-'+t);
     if(btn)btn.classList.toggle('active',t===tab);
@@ -2180,6 +2216,7 @@ function switchDashTab(tab){
   if(tab==='overview')loadDashOverview();
   else if(tab==='records')loadDashRecords();
   else if(tab==='users')loadDashUsers();
+  else if(tab==='logs')loadActivityLogs();
 }
 
 async function loadDashOverview(){
@@ -2270,17 +2307,12 @@ function filterDashRecords(){
 
 async function loadToDashPreview(id){
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readonly');
-    const req=tx.objectStore(STORE).get(id);
-    req.onsuccess=e=>{
-      const r=e.target.result;
-      if(!r)return;
-      loadSnapshotToMain(r);
-      generateQRCodes(r.refNo,r);
-      closeDashboard();
-      showNotif('Loaded to preview!','#0d9488');
-    };
+    const r=await getRecordById(id);
+    if(!r)return;
+    loadSnapshotToMain(r);
+    generateQRCodes(r.refNo,r);
+    closeDashboard();
+    showNotif('Loaded to preview!','#0d9488');
   }catch(e){showNotif('Error loading.','#c0392b');}
 }
 
@@ -2293,14 +2325,10 @@ function openEditFromDash(id){
 async function deleteDashRecord(id){
   if(!confirm('Delete this record permanently? This cannot be undone.'))return;
   try{
-    const database=await openDB();
-    const tx=database.transaction(STORE,'readwrite');
-    tx.objectStore(STORE).delete(id);
-    tx.oncomplete=async()=>{
-      showNotif('Record deleted.','#d97706');
-      await loadDashRecords();
-      await refreshSavedRefs();
-    };
+    await deleteRecordById(id);
+    showNotif('Record deleted.','#d97706');
+    await loadDashRecords();
+    await refreshSavedRefs();
   }catch(e){showNotif('Error deleting.','#c0392b');}
 }
 
@@ -2351,15 +2379,9 @@ async function promoteUser(){
   if(!sel||!sel.value)return;
   const username=sel.value;
   try{
-    const database=await openDB();
-    const tx=database.transaction(USER_STORE,'readwrite');
-    const store=tx.objectStore(USER_STORE);
-    const req=store.get(username);
-    req.onsuccess=e=>{
-      const user=e.target.result;
-      if(user){user.role='admin';store.put(user);}
-    };
-    tx.oncomplete=()=>{showNotif(username+' promoted to admin!','#16a34a');loadDashUsers();};
+    await promoteUserToAdmin(username);
+    showNotif(username+' promoted to admin!','#16a34a');
+    loadDashUsers();
   }catch(e){showNotif('Error: '+e.message,'#c0392b');}
 }
 
@@ -2377,11 +2399,60 @@ async function generateNextRefNo(){
   return prefix+String(maxNum+1).padStart(3,'0');
 }
 
+// ===== ACTIVITY LOG UI =====
+let allActivityLogs = [];
+
+async function loadActivityLogs(){
+  const el = document.getElementById('dash-logs-list');
+  if(!el) return;
+  el.innerHTML = '<div class="tx-empty">Loading&#8230;</div>';
+  try{
+    const logs = await getAllLogs();
+    allActivityLogs = logs || [];
+    renderActivityLogs(allActivityLogs);
+  }catch(e){el.innerHTML='<div class="tx-empty">Error loading logs: '+e.message+'</div>';}
+}
+
+function renderActivityLogs(logs){
+  const el = document.getElementById('dash-logs-list');
+  if(!el) return;
+  if(!logs||!logs.length){el.innerHTML='<div class="tx-empty">No activity logs yet.</div>';return;}
+  const actionColor = {
+    'LOGIN':'#16a34a','LOGOUT':'#64748b','CREATE':'#0d9488',
+    'UPDATE':'#d97706','DELETE':'#c0392b'
+  };
+  el.innerHTML = `<table class="dash-table" style="width:100%;border-collapse:collapse;">
+    <thead><tr>
+      <th>Time</th><th>User</th><th>Action</th><th>Detail</th>
+    </tr></thead>
+    <tbody>${logs.map(l=>{
+      const d = new Date(l.loggedAt).toLocaleString('en-PH',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const color = actionColor[l.action]||'#334155';
+      return`<tr>
+        <td style="font-size:10.5px;color:var(--muted);white-space:nowrap;">${d}</td>
+        <td><strong>${esc(l.username)}</strong></td>
+        <td><span style="background:${color}18;color:${color};font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:3px;">${esc(l.action)}</span></td>
+        <td style="font-size:11px;color:var(--text);">${esc(l.detail||'')}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function filterActivityLogs(){
+  const q = (document.getElementById('logSearch').value||'').toLowerCase();
+  if(!q){renderActivityLogs(allActivityLogs);return;}
+  renderActivityLogs(allActivityLogs.filter(l=>
+    (l.username||'').toLowerCase().includes(q)||
+    (l.action||'').toLowerCase().includes(q)||
+    (l.detail||'').toLowerCase().includes(q)
+  ));
+}
+
 document.getElementById('dashboardModal').addEventListener('click',function(e){if(e.target===this)closeDashboard();});
 
 // Only init app after login
 // renderSidebar/loadPreset called after login in doLogin()
-openDB(); // pre-warm DB so admin user is seeded
+// Supabase: admin user is seeded via SQL setup (see config comments above)
 
 
 </script>
